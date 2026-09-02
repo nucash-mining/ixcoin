@@ -1,0 +1,3 @@
+This directory must exist before ./autogen.sh runs: autoheader writes
+bitcoin-config.h.in into it and fails if it is missing. The generated files
+themselves are ignored.

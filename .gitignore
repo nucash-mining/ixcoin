@@ -13,7 +13,8 @@ config.log
 config.status
 configure
 autom4te.cache/
-ixcoin-core/src/config/
+ixcoin-core/src/config/*
+!ixcoin-core/src/config/.gitkeep
 ixcoin-core/src/obj/
 ixcoin-core/src/obj-test/
 ixcoin-core/src/qt/moc_*
