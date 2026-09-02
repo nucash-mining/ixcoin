@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- iXcoin brand mark. MIT licensed, generated for the iXcoin Core wallet. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="coin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#FFD97A"/>
+      <stop offset="0.42" stop-color="#F5B426"/>
+      <stop offset="1"    stop-color="#C4790C"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0"   stop-color="#FFF0C0"/>
+      <stop offset="0.5" stop-color="#E9A81C"/>
+      <stop offset="1"   stop-color="#9C5A05"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A2B02"/>
+      <stop offset="1" stop-color="#221300"/>
+    </linearGradient>
+  </defs>
+
+  <!-- coin body -->
+  <circle cx="256" cy="256" r="240" fill="url(#rim)"/>
+  <circle cx="256" cy="256" r="222" fill="url(#coin)"/>
+  <circle cx="256" cy="256" r="222" fill="none" stroke="#8F5304" stroke-opacity="0.35" stroke-width="3"/>
+  <!-- inner bevel ring -->
+  <circle cx="256" cy="256" r="200" fill="none" stroke="#FFE7A8" stroke-opacity="0.55" stroke-width="4"/>
+  <!-- top gloss -->
+  <ellipse cx="256" cy="176" rx="186" ry="128" fill="url(#gloss)"/>
+
+  <!-- IX monogram -->
+  <g fill="url(#mark)" transform="translate(-8,0)">
+    <!-- I -->
+    <rect x="150" y="158" width="44" height="196" rx="6"/>
+    <!-- X : two diagonal bands -->
+    <path d="M214 158 h52 l112 196 h-52 z"/>
+    <path d="M326 158 h52 L266 354 h-52 z"/>
+  </g>
+</svg>

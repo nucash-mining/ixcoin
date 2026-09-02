@@ -1,0 +1,39 @@
+# build output
+*.o
+*.a
+*.lo
+*.la
+*.so
+.deps/
+.libs/
+.dirstamp
+Makefile
+Makefile.in
+config.log
+config.status
+configure
+autom4te.cache/
+ixcoin-core/src/config/
+ixcoin-core/src/obj/
+ixcoin-core/src/obj-test/
+ixcoin-core/src/qt/moc_*
+ixcoin-core/src/qt/ui_*
+ixcoin-core/src/qt/qrc_*
+
+# depends build tree (inputs are downloaded, not vendored)
+ixcoin-core/depends/work/
+ixcoin-core/depends/built/
+ixcoin-core/depends/sources/
+ixcoin-core/depends/x86_64-*/
+ixcoin-core/depends/SDKs/
+
+# android
+android-wallet/build/
+android-wallet/app/build/
+android-wallet/.gradle/
+android-wallet/local.properties
+.idea/
+
+# berkeley db build input
+db-4.8.30.NC*/
+db-4.8.30.NC.tar.gz*

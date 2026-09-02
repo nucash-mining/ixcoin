@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.1
+Type=Application
+Name=iXcoin Core
+GenericName=iXcoin Wallet
+Comment=Send and receive iXcoin (IXC) on the peer-to-peer network
+Keywords=ixcoin;IXC;wallet;cryptocurrency;bitcoin;merged mining;
+Exec=ixcoin-qt %u
+TryExec=ixcoin-qt
+Terminal=false
+Icon=ixcoin
+StartupWMClass=iXcoin-Qt
+MimeType=x-scheme-handler/ixcoin;
+Categories=Office;Finance;Network;
