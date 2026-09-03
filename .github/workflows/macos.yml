@@ -50,7 +50,12 @@ jobs:
           sed -i '' 's/__atomic_compare_exchange/__atomic_compare_exchange_db/' dbinc/atomic.h
           sed -i '' 's/atomic_init/atomic_init_db/' dbinc/atomic.h mp/mp_region.c mp/mp_mvcc.c mp/mp_fget.c mutex/mut_method.c mutex/mut_tas.c
           cd build_unix
-          ../dist/configure --enable-cxx --disable-shared --with-pic --disable-replication --prefix="$BDB_PREFIX"
+          # 4.8 predates arm64 Darwin, so its mutex probe (which compiles *and
+          # runs* a test) finds nothing and it errors out instead of falling
+          # back. Name the implementation explicitly; macOS is pthreads.
+          ../dist/configure --enable-cxx --disable-shared --with-pic \
+            --disable-replication --with-mutex=POSIX/pthreads \
+            --prefix="$BDB_PREFIX"
           make -j"$(sysctl -n hw.ncpu)"
           make install
 
