@@ -21,6 +21,10 @@ public enum Difficulty {
     /// there — except exactly at `height == interval`, which stays on the old
     /// path. Getting this wrong only diverges at a retarget, so it can look
     /// correct for hundreds of blocks before rejecting one.
+    /// The `height != n` guard is carried over from the consensus code, where
+    /// it is unreachable: it can only matter once the interval is 144, which
+    /// requires height > 20055, and the full-window branch already requires
+    /// height >= 43000. It is kept so this reads the same as the C++ rule.
     public static func blocksToGoBack(height: Int) -> Int {
         let n = interval(height: height)
         if height >= ChainParams.fullWindowHeight && height != n { return n }
