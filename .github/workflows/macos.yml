@@ -1,0 +1,97 @@
+name: macOS build
+
+# There is no way to cross-compile or test a macOS build from Linux: depends
+# needs an Apple-licensed SDK, and a .app cannot be executed off a Mac. So the
+# macOS wallet is built and smoke-tested here, on a real macOS runner, and the
+# result is published as a build artifact.
+
+on:
+  push:
+    branches: [ ixcoin-core-0.14.1, master, main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13     # x86_64
+            arch: x86_64
+          - runner: macos-14     # Apple silicon
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          brew update
+          # berkeley-db@4 is what wallet.dat compatibility requires; anything
+          # newer silently changes the on-disk format.
+          brew install automake libtool pkg-config boost libevent qt@5 berkeley-db@4 || true
+          brew install openssl@1.1 || brew install openssl@3 || true
+
+      - name: Configure
+        run: |
+          set -euxo pipefail
+          BDB_PREFIX="$(brew --prefix berkeley-db@4)"
+          QT_PREFIX="$(brew --prefix qt@5)"
+          if brew --prefix openssl@1.1 >/dev/null 2>&1; then
+            SSL_PREFIX="$(brew --prefix openssl@1.1)"
+          else
+            SSL_PREFIX="$(brew --prefix openssl@3)"
+          fi
+          export PKG_CONFIG_PATH="$SSL_PREFIX/lib/pkgconfig:$QT_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export PATH="$QT_PREFIX/bin:$PATH"
+          ./autogen.sh
+          ./configure \
+            --with-gui=qt5 \
+            --disable-tests \
+            --disable-bench \
+            BDB_CFLAGS="-I$BDB_PREFIX/include" \
+            BDB_LIBS="-L$BDB_PREFIX/lib -ldb_cxx-4.8" \
+            CPPFLAGS="-I$BDB_PREFIX/include -I$SSL_PREFIX/include" \
+            LDFLAGS="-L$BDB_PREFIX/lib -L$SSL_PREFIX/lib"
+
+      - name: Build
+        run: make -j"$(sysctl -n hw.ncpu)"
+
+      - name: Smoke test
+        run: |
+          set -euxo pipefail
+          ./src/ixcoind --version
+          ./src/ixcoin-cli --version
+          DD="$(mktemp -d)"
+          printf 'regtest=1\nserver=1\nrpcuser=t\nrpcpassword=t\nlisten=0\nrpcport=18557\n' > "$DD/ixcoin.conf"
+          ./src/ixcoind -datadir="$DD" -daemon
+          for i in $(seq 1 30); do
+            ./src/ixcoin-cli -datadir="$DD" -rpcport=18557 -rpcuser=t -rpcpassword=t getblockchaininfo >/dev/null 2>&1 && break
+            sleep 2
+          done
+          CLI="./src/ixcoin-cli -datadir=$DD -rpcport=18557 -rpcuser=t -rpcpassword=t"
+          $CLI getblockchaininfo
+          $CLI getnetworkinfo | grep subversion
+          # The wallet and the miner must both work, not just the daemon start.
+          ADDR="$($CLI getnewaddress)"
+          $CLI generatetoaddress 1 "$ADDR"
+          test "$($CLI getblockcount)" = "1"
+          $CLI stop
+
+      - name: Package .dmg
+        run: make deploy || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ixcoin-macos-${{ matrix.arch }}
+          path: |
+            *.dmg
+            src/ixcoind
+            src/ixcoin-cli
+            src/ixcoin-tx
+            src/qt/ixcoin-qt
+          if-no-files-found: warn
