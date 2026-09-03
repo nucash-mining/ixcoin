@@ -58,8 +58,11 @@ jobs:
             --with-libraries=system,filesystem,program_options,thread,chrono,test
           # A 2018 boost against a current clang defaulting to gnu++17 trips over
           # things C++17 removed, exactly as it did cross-compiling for Android.
+          # -Wno-enum-constexpr-conversion: boost 1.68's MPL assigns -1 to an
+          # enum, which clang 16+ made an error rather than a warning.
           ./b2 -j"$(sysctl -n hw.ncpu)" toolset=clang \
-            cxxflags="-std=c++11" linkflags="-std=c++11" link=static \
+            cxxflags="-std=c++11 -Wno-enum-constexpr-conversion" \
+            linkflags="-std=c++11" link=static \
             runtime-link=shared threading=multi variant=release install
 
       # Homebrew dropped berkeley-db@4, and the newer formulae are not a
@@ -111,6 +114,7 @@ jobs:
             --with-boost="$BOOST_PREFIX" \
             BDB_CFLAGS="-I$BDB_PREFIX/include" \
             BDB_LIBS="-L$BDB_PREFIX/lib -ldb_cxx-4.8" \
+            CXXFLAGS="-Wno-enum-constexpr-conversion" \
             CPPFLAGS="-I$BDB_PREFIX/include -I$SSL_PREFIX/include -I$BOOST_PREFIX/include -I$BREW_PREFIX/include" \
             LDFLAGS="-L$BDB_PREFIX/lib -L$SSL_PREFIX/lib -L$BOOST_PREFIX/lib -L$BREW_PREFIX/lib"
 
