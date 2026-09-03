@@ -23,6 +23,10 @@ jobs:
           - runner: macos-14     # Apple silicon
             arch: arm64
     runs-on: ${{ matrix.runner }}
+    # The C++ source lives under ixcoin-core/, not at the repository root.
+    defaults:
+      run:
+        working-directory: ixcoin-core
 
     steps:
       - uses: actions/checkout@v4
@@ -109,9 +113,9 @@ jobs:
         with:
           name: ixcoin-macos-${{ matrix.arch }}
           path: |
-            *.dmg
-            src/ixcoind
-            src/ixcoin-cli
-            src/ixcoin-tx
-            src/qt/ixcoin-qt
+            ixcoin-core/*.dmg
+            ixcoin-core/src/ixcoind
+            ixcoin-core/src/ixcoin-cli
+            ixcoin-core/src/ixcoin-tx
+            ixcoin-core/src/qt/ixcoin-qt
           if-no-files-found: warn
