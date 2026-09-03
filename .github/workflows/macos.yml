@@ -51,11 +51,15 @@ jobs:
           echo "7f6130bc3cf65f56a618888ce9d5ea704fa10b462be126ad053e80e553d6d8b7  boost_1_68_0.tar.bz2" | shasum -a 256 -c -
           tar xjf boost_1_68_0.tar.bz2
           cd boost_1_68_0
-          ./bootstrap.sh --prefix="$BOOST_PREFIX" \
+          # toolset=clang, not the auto-detected "darwin" one: on macOS b2
+          # picks darwin and passes -fcoalesce-templates, an Apple GCC flag
+          # current clang rejects outright.
+          ./bootstrap.sh --prefix="$BOOST_PREFIX" --with-toolset=clang \
             --with-libraries=system,filesystem,program_options,thread,chrono,test
           # A 2018 boost against a current clang defaulting to gnu++17 trips over
           # things C++17 removed, exactly as it did cross-compiling for Android.
-          ./b2 -j"$(sysctl -n hw.ncpu)" cxxflags="-std=c++11" link=static \
+          ./b2 -j"$(sysctl -n hw.ncpu)" toolset=clang \
+            cxxflags="-std=c++11" linkflags="-std=c++11" link=static \
             runtime-link=shared threading=multi variant=release install
 
       # Homebrew dropped berkeley-db@4, and the newer formulae are not a
