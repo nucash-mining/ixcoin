@@ -92,6 +92,26 @@ jobs:
           make -j"$(sysctl -n hw.ncpu)"
           make install
 
+      # The Qt GUI requires protobuf for BIP70 payment requests, and 0.14 has
+      # no switch to turn that off. Modern protobuf is a different library
+      # generation entirely, so pin the same 2.6.1 the depends system gives the
+      # Linux and Windows builds -- hash taken from depends/packages.
+      - name: Build protobuf 2.6.1
+        run: |
+          set -euxo pipefail
+          PB_PREFIX="$HOME/protobuf261"
+          mkdir -p "$PB_PREFIX" && cd "$(mktemp -d)"
+          curl -fsSLO https://github.com/protocolbuffers/protobuf/releases/download/v2.6.1/protobuf-2.6.1.tar.bz2
+          echo "ee445612d544d885ae240ffbcbf9267faa9f593b7b101f21d58beceb92661910  protobuf-2.6.1.tar.bz2" | shasum -a 256 -c -
+          tar xjf protobuf-2.6.1.tar.bz2
+          cd protobuf-2.6.1
+          # 2.6.1 predates C++11 as a default and uses std::auto_ptr, so keep
+          # the standard where those still exist.
+          ./configure --prefix="$PB_PREFIX" --disable-shared --with-pic \
+            CXXFLAGS="-std=c++11"
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
       - name: Configure
         run: |
           set -euxo pipefail
@@ -104,7 +124,9 @@ jobs:
           # configure could not find boost/version.hpp and reported it as "no
           # working boost sleep implementation".
           BREW_PREFIX="$(brew --prefix)"
-          export PKG_CONFIG_PATH="$SSL_PREFIX/lib/pkgconfig:$QT_PREFIX/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          PB_PREFIX="$HOME/protobuf261"
+          export PKG_CONFIG_PATH="$SSL_PREFIX/lib/pkgconfig:$QT_PREFIX/lib/pkgconfig:$PB_PREFIX/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export PATH="$PB_PREFIX/bin:$PATH"
           export PATH="$QT_PREFIX/bin:$PATH"
           ./autogen.sh
           ./configure \
