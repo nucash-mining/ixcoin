@@ -69,17 +69,24 @@ jobs:
           BDB_PREFIX="$HOME/bdb4"
           QT_PREFIX="$(brew --prefix qt@5)"
           SSL_PREFIX="$(brew --prefix openssl@3)"
-          export PKG_CONFIG_PATH="$SSL_PREFIX/lib/pkgconfig:$QT_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          BOOST_PREFIX="$(brew --prefix boost)"
+          # Homebrew's prefix is /opt/homebrew on Apple silicon and /usr/local
+          # on Intel, and clang searches neither by default -- which is why
+          # configure could not find boost/version.hpp and reported it as "no
+          # working boost sleep implementation".
+          BREW_PREFIX="$(brew --prefix)"
+          export PKG_CONFIG_PATH="$SSL_PREFIX/lib/pkgconfig:$QT_PREFIX/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           export PATH="$QT_PREFIX/bin:$PATH"
           ./autogen.sh
           ./configure \
             --with-gui=qt5 \
             --disable-tests \
             --disable-bench \
+            --with-boost="$BOOST_PREFIX" \
             BDB_CFLAGS="-I$BDB_PREFIX/include" \
             BDB_LIBS="-L$BDB_PREFIX/lib -ldb_cxx-4.8" \
-            CPPFLAGS="-I$BDB_PREFIX/include -I$SSL_PREFIX/include" \
-            LDFLAGS="-L$BDB_PREFIX/lib -L$SSL_PREFIX/lib"
+            CPPFLAGS="-I$BDB_PREFIX/include -I$SSL_PREFIX/include -I$BOOST_PREFIX/include -I$BREW_PREFIX/include" \
+            LDFLAGS="-L$BDB_PREFIX/lib -L$SSL_PREFIX/lib -L$BOOST_PREFIX/lib -L$BREW_PREFIX/lib"
 
       # configure reports "No working boost sleep implementation found" for any
       # failure in that probe, and the actual compiler error only exists in
