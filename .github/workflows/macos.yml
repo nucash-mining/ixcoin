@@ -81,6 +81,17 @@ jobs:
             CPPFLAGS="-I$BDB_PREFIX/include -I$SSL_PREFIX/include" \
             LDFLAGS="-L$BDB_PREFIX/lib -L$SSL_PREFIX/lib"
 
+      # configure reports "No working boost sleep implementation found" for any
+      # failure in that probe, and the actual compiler error only exists in
+      # config.log — which is not otherwise visible from a CI run.
+      - name: Show config.log on failure
+        if: failure()
+        run: |
+          echo "=== boost sleep probe ==="
+          awk '/sleep_for/,0' config.log | grep -E "error:|undefined|ld:" | head -40 || true
+          echo "=== last 80 lines ==="
+          tail -80 config.log || true
+
       - name: Build
         run: make -j"$(sysctl -n hw.ncpu)"
 
