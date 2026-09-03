@@ -30,21 +30,36 @@ jobs:
       - name: Install build dependencies
         run: |
           brew update
-          # berkeley-db@4 is what wallet.dat compatibility requires; anything
-          # newer silently changes the on-disk format.
-          brew install automake libtool pkg-config boost libevent qt@5 berkeley-db@4 || true
-          brew install openssl@1.1 || brew install openssl@3 || true
+          brew install automake libtool pkg-config boost libevent qt@5 openssl@3
+
+      # Homebrew dropped berkeley-db@4, and the newer formulae are not a
+      # substitute: BDB 5 writes a different on-disk format, so a wallet.dat
+      # produced here would not open in any other iXcoin Core build. Build 4.8
+      # from source instead, the way Bitcoin's own release process does.
+      - name: Build Berkeley DB 4.8
+        run: |
+          set -euxo pipefail
+          BDB_PREFIX="$HOME/bdb4"
+          mkdir -p "$BDB_PREFIX" && cd "$(mktemp -d)"
+          curl -fsSLO https://download.oracle.com/berkeley-db/db-4.8.30.NC.tar.gz
+          echo "12edc0df75bf9abd7f82f821795bcee50f42cb2e5f76a6a281b85732798364ef  db-4.8.30.NC.tar.gz" | shasum -a 256 -c -
+          tar xzf db-4.8.30.NC.tar.gz
+          cd db-4.8.30.NC
+          # 4.8 predates C11 <stdatomic.h>; these names now collide with the
+          # compiler builtins.
+          sed -i '' 's/__atomic_compare_exchange/__atomic_compare_exchange_db/' dbinc/atomic.h
+          sed -i '' 's/atomic_init/atomic_init_db/' dbinc/atomic.h mp/mp_region.c mp/mp_mvcc.c mp/mp_fget.c mutex/mut_method.c mutex/mut_tas.c
+          cd build_unix
+          ../dist/configure --enable-cxx --disable-shared --with-pic --disable-replication --prefix="$BDB_PREFIX"
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
 
       - name: Configure
         run: |
           set -euxo pipefail
-          BDB_PREFIX="$(brew --prefix berkeley-db@4)"
+          BDB_PREFIX="$HOME/bdb4"
           QT_PREFIX="$(brew --prefix qt@5)"
-          if brew --prefix openssl@1.1 >/dev/null 2>&1; then
-            SSL_PREFIX="$(brew --prefix openssl@1.1)"
-          else
-            SSL_PREFIX="$(brew --prefix openssl@3)"
-          fi
+          SSL_PREFIX="$(brew --prefix openssl@3)"
           export PKG_CONFIG_PATH="$SSL_PREFIX/lib/pkgconfig:$QT_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           export PATH="$QT_PREFIX/bin:$PATH"
           ./autogen.sh
