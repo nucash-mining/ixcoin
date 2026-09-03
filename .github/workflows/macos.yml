@@ -34,7 +34,29 @@ jobs:
       - name: Install build dependencies
         run: |
           brew update
-          brew install automake libtool pkg-config boost libevent qt@5 openssl@3
+          brew install automake libtool pkg-config libevent qt@5 openssl@3
+
+      # Homebrew ships boost 1.8x, where boost::system became header-only (1.69)
+      # and libboost_system no longer exists -- which this 2017 codebase links
+      # against, so configure fails with "Could not find a version of the
+      # boost_system library". 1.68 is the last release that still builds it,
+      # and pinning boost also matches what the Linux and Windows releases get
+      # from the depends system, so all platforms share one version.
+      - name: Build boost 1.68
+        run: |
+          set -euxo pipefail
+          BOOST_PREFIX="$HOME/boost168"
+          mkdir -p "$BOOST_PREFIX" && cd "$(mktemp -d)"
+          curl -fsSLO https://archives.boost.io/release/1.68.0/source/boost_1_68_0.tar.bz2
+          echo "7f6130bc3cf65f56a618888ce9d5ea704fa10b462be126ad053e80e553d6d8b7  boost_1_68_0.tar.bz2" | shasum -a 256 -c -
+          tar xjf boost_1_68_0.tar.bz2
+          cd boost_1_68_0
+          ./bootstrap.sh --prefix="$BOOST_PREFIX" \
+            --with-libraries=system,filesystem,program_options,thread,chrono,test
+          # A 2018 boost against a current clang defaulting to gnu++17 trips over
+          # things C++17 removed, exactly as it did cross-compiling for Android.
+          ./b2 -j"$(sysctl -n hw.ncpu)" cxxflags="-std=c++11" link=static \
+            runtime-link=shared threading=multi variant=release install
 
       # Homebrew dropped berkeley-db@4, and the newer formulae are not a
       # substitute: BDB 5 writes a different on-disk format, so a wallet.dat
@@ -69,7 +91,7 @@ jobs:
           BDB_PREFIX="$HOME/bdb4"
           QT_PREFIX="$(brew --prefix qt@5)"
           SSL_PREFIX="$(brew --prefix openssl@3)"
-          BOOST_PREFIX="$(brew --prefix boost)"
+          BOOST_PREFIX="$HOME/boost168"
           # Homebrew's prefix is /opt/homebrew on Apple silicon and /usr/local
           # on Intel, and clang searches neither by default -- which is why
           # configure could not find boost/version.hpp and reported it as "no
