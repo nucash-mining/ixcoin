@@ -1,0 +1,41 @@
+name: iOS core
+
+# The iOS wallet's chain logic lives in a Swift package so it can be compiled
+# and tested without Xcode project plumbing, signing, or a device. Nothing here
+# can be built on Linux, so CI is the only place these tests ever run — treat a
+# red run as authoritative.
+
+on:
+  push:
+    branches: [ ixcoin-core-0.14.1, master, main ]
+    paths: [ 'ios/**', '.github/workflows/ios.yml' ]
+  pull_request:
+    paths: [ 'ios/**', '.github/workflows/ios.yml' ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: ios/IXcoinKit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build -v
+
+      - name: Test
+        run: swift test
+
+      # Compiling for a real iOS target catches anything that only works on the
+      # macOS SDK, which a plain `swift build` would let through.
+      - name: Build for iOS Simulator
+        run: |
+          xcodebuild -scheme IXcoinKit \
+            -destination 'generic/platform=iOS Simulator' \
+            -skipPackagePluginValidation \
+            build
