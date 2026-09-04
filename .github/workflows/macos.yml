@@ -37,6 +37,7 @@ jobs:
           # Without the tags the version script cannot run git describe, and a
           # tagged build reports a commit hash instead of the release version.
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Install build dependencies
         run: |
@@ -47,6 +48,15 @@ jobs:
       # substitute: BDB 5 writes a different on-disk format, so a wallet.dat
       # produced here would not open in any other iXcoin Core build. Build 4.8
       # from source instead, the way Bitcoin's own release process does.
+      # genbuild.sh only uses the tag when git describe finds one and the tree
+      # is clean; otherwise the binaries report a commit hash. Show both so a
+      # mismatch is diagnosable from the log rather than by guesswork.
+      - name: Version detection
+        run: |
+          git describe --abbrev=0 || echo "(no tag found)"
+          git rev-parse HEAD
+          git diff-index --quiet HEAD -- && echo "tree clean" || git status --porcelain | head
+
       - name: Build Berkeley DB 4.8
         run: |
           set -euxo pipefail
