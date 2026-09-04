@@ -66,6 +66,21 @@ jobs:
           make -j"$(sysctl -n hw.ncpu)"
           make install
 
+      # boost::system has been header-only since boost 1.69 -- there are no
+      # symbols left to link. configure's AX_BOOST_SYSTEM still insists on
+      # linking -lboost_system, and the shell variable it decides on cannot be
+      # pre-seeded from the command line, so give it an empty archive to find.
+      # An empty libboost_system.a is not a stub or a lie: the library really
+      # does contain nothing now.
+      - name: Provide an empty libboost_system
+        run: |
+          set -euxo pipefail
+          mkdir -p "$HOME/boostcompat/lib"
+          : > /tmp/empty.c
+          cc -c /tmp/empty.c -o /tmp/empty.o
+          ar rcs "$HOME/boostcompat/lib/libboost_system.a" /tmp/empty.o
+          ar t "$HOME/boostcompat/lib/libboost_system.a"
+
       - name: Configure
         run: |
           set -euxo pipefail
@@ -89,10 +104,8 @@ jobs:
             BDB_CFLAGS="-I$BDB_PREFIX/include" \
             BDB_LIBS="-L$BDB_PREFIX/lib -ldb_cxx-4.8" \
             CXXFLAGS="-std=c++17" \
-            ax_cv_boost_system=yes \
-            BOOST_SYSTEM_LIB="" \
             CPPFLAGS="-I$BDB_PREFIX/include -I$SSL_PREFIX/include -I$BOOST_PREFIX/include -I$BREW_PREFIX/include" \
-            LDFLAGS="-L$BDB_PREFIX/lib -L$SSL_PREFIX/lib -L$BOOST_PREFIX/lib -L$BREW_PREFIX/lib"
+            LDFLAGS="-L$BDB_PREFIX/lib -L$SSL_PREFIX/lib -L$BOOST_PREFIX/lib -L$BREW_PREFIX/lib -L$HOME/boostcompat/lib"
 
       # configure reports "No working boost sleep implementation found" for any
       # failure in that probe, and the actual compiler error only exists in
