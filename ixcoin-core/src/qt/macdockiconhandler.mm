@@ -31,12 +31,16 @@ bool dockClickHandler(id self,SEL _cmd,...) {
 }
 
 void setupDockClickHandler() {
-    Class cls = objc_getClass("NSApplication");
-    id appInst = objc_msgSend((id)cls, sel_registerName("sharedApplication"));
-    
-    if (appInst != NULL) {
-        id delegate = objc_msgSend(appInst, sel_registerName("delegate"));
-        Class delClass = (Class)objc_msgSend(delegate,  sel_registerName("class"));
+    // Plain Objective-C message sends rather than calls to objc_msgSend.
+    // Current clang refuses the untyped form: objc_msgSend is declared
+    // without a usable prototype, so every call has to be cast to the right
+    // function pointer type. This file is Objective-C++ and already imports
+    // Cocoa, so the ordinary syntax is available and clearer.
+    id appInst = [NSApplication sharedApplication];
+
+    if (appInst != nil) {
+        id delegate = [appInst delegate];
+        Class delClass = [delegate class];
         SEL shouldHandle = sel_registerName("applicationShouldHandleReopen:hasVisibleWindows:");
         if (class_getInstanceMethod(delClass, shouldHandle))
             class_replaceMethod(delClass, shouldHandle, (IMP)dockClickHandler, "B@:");
