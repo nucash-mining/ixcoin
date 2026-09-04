@@ -1,4 +1,4 @@
-name: macOS build (daemon)
+name: macOS build
 
 # There is no way to cross-compile or test a macOS build from Linux: depends
 # needs an Apple-licensed SDK, and a .app cannot be executed off a Mac. So the
@@ -37,85 +37,33 @@ jobs:
       - name: Install build dependencies
         run: |
           brew update
-          brew install automake libtool pkg-config libevent openssl@3
-
-      # Homebrew ships boost 1.8x, where boost::system became header-only (1.69)
-      # and libboost_system no longer exists -- which this 2017 codebase links
-      # against, so configure fails with "Could not find a version of the
-      # boost_system library". 1.68 is the last release that still builds it,
-      # and pinning boost also matches what the Linux and Windows releases get
-      # from the depends system, so all platforms share one version.
-      - name: Build boost 1.68
-        run: |
-          set -euxo pipefail
-          BOOST_PREFIX="$HOME/boost168"
-          mkdir -p "$BOOST_PREFIX" && cd "$(mktemp -d)"
-          curl -fsSLO https://archives.boost.io/release/1.68.0/source/boost_1_68_0.tar.bz2
-          echo "7f6130bc3cf65f56a618888ce9d5ea704fa10b462be126ad053e80e553d6d8b7  boost_1_68_0.tar.bz2" | shasum -a 256 -c -
-          tar xjf boost_1_68_0.tar.bz2
-          cd boost_1_68_0
-          # toolset=clang, not the auto-detected "darwin" one: on macOS b2
-          # picks darwin and passes -fcoalesce-templates, an Apple GCC flag
-          # current clang rejects outright.
-          ./bootstrap.sh --prefix="$BOOST_PREFIX" --with-toolset=clang \
-            --with-libraries=system,filesystem,program_options,thread,chrono,test
-          # A 2018 boost against a current clang defaulting to gnu++17 trips over
-          # things C++17 removed, exactly as it did cross-compiling for Android.
-          # -Wno-enum-constexpr-conversion: boost 1.68's MPL assigns -1 to an
-          # enum, which clang 16+ made an error rather than a warning.
-          ./b2 -j"$(sysctl -n hw.ncpu)" toolset=clang \
-            cxxflags="-std=c++11 -Wno-enum-constexpr-conversion" \
-            linkflags="-std=c++11" link=static \
-            runtime-link=shared threading=multi variant=release install
-
-      # Homebrew dropped berkeley-db@4, and the newer formulae are not a
-      # substitute: BDB 5 writes a different on-disk format, so a wallet.dat
-      # produced here would not open in any other iXcoin Core build. Build 4.8
-      # from source instead, the way Bitcoin's own release process does.
-      - name: Build Berkeley DB 4.8
-        run: |
-          set -euxo pipefail
-          BDB_PREFIX="$HOME/bdb4"
-          mkdir -p "$BDB_PREFIX" && cd "$(mktemp -d)"
-          curl -fsSLO https://download.oracle.com/berkeley-db/db-4.8.30.NC.tar.gz
-          echo "12edc0df75bf9abd7f82f821795bcee50f42cb2e5f76a6a281b85732798364ef  db-4.8.30.NC.tar.gz" | shasum -a 256 -c -
-          tar xzf db-4.8.30.NC.tar.gz
-          cd db-4.8.30.NC
-          # 4.8 predates C11 <stdatomic.h>; these names now collide with the
-          # compiler builtins.
-          sed -i '' 's/__atomic_compare_exchange/__atomic_compare_exchange_db/' dbinc/atomic.h
-          sed -i '' 's/atomic_init/atomic_init_db/' dbinc/atomic.h mp/mp_region.c mp/mp_mvcc.c mp/mp_fget.c mutex/mut_method.c mutex/mut_tas.c
-          cd build_unix
-          # 4.8 predates arm64 Darwin, so its mutex probe (which compiles *and
-          # runs* a test) finds nothing and it errors out instead of falling
-          # back. Name the implementation explicitly; macOS is pthreads.
-          ../dist/configure --enable-cxx --disable-shared --with-pic \
-            --disable-replication --with-mutex=POSIX/pthreads \
-            --prefix="$BDB_PREFIX"
-          make -j"$(sysctl -n hw.ncpu)"
-          make install
+          brew install automake libtool pkg-config libevent openssl@3 boost qt@5 protobuf
 
       - name: Configure
         run: |
           set -euxo pipefail
           BDB_PREFIX="$HOME/bdb4"
           SSL_PREFIX="$(brew --prefix openssl@3)"
-          BOOST_PREFIX="$HOME/boost168"
+          BOOST_PREFIX="$(brew --prefix boost)"
+          QT_PREFIX="$(brew --prefix qt@5)"
           # Homebrew's prefix is /opt/homebrew on Apple silicon and /usr/local
           # on Intel, and clang searches neither by default -- which is why
           # configure could not find boost/version.hpp and reported it as "no
           # working boost sleep implementation".
           BREW_PREFIX="$(brew --prefix)"
-          export PKG_CONFIG_PATH="$SSL_PREFIX/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export PKG_CONFIG_PATH="$SSL_PREFIX/lib/pkgconfig:$QT_PREFIX/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export PATH="$QT_PREFIX/bin:$PATH"
           ./autogen.sh
           ./configure \
-            --without-gui \
+            --with-gui=qt5 \
             --disable-tests \
             --disable-bench \
             --with-boost="$BOOST_PREFIX" \
             BDB_CFLAGS="-I$BDB_PREFIX/include" \
             BDB_LIBS="-L$BDB_PREFIX/lib -ldb_cxx-4.8" \
-            CXXFLAGS="-Wno-enum-constexpr-conversion" \
+            CXXFLAGS="-std=c++17" \
+            ax_cv_boost_system=yes \
+            BOOST_SYSTEM_LIB="" \
             CPPFLAGS="-I$BDB_PREFIX/include -I$SSL_PREFIX/include -I$BOOST_PREFIX/include -I$BREW_PREFIX/include" \
             LDFLAGS="-L$BDB_PREFIX/lib -L$SSL_PREFIX/lib -L$BOOST_PREFIX/lib -L$BREW_PREFIX/lib"
 
@@ -164,5 +112,6 @@ jobs:
             ixcoin-core/src/ixcoind
             ixcoin-core/src/ixcoin-cli
             ixcoin-core/src/ixcoin-tx
+            ixcoin-core/src/qt/ixcoin-qt
 
           if-no-files-found: warn

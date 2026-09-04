@@ -16,6 +16,7 @@
 #include "main.h"
 #include "net.h"
 #include "policy/policy.h"
+#include "random.h"
 #include "primitives/block.h"
 #include "primitives/transaction.h"
 #include "script/script.h"
@@ -23,6 +24,9 @@
 #include "timedata.h"
 #include "txmempool.h"
 #include "util.h"
+
+#include <algorithm>
+#include <limits>
 #include "ui_interface.h"
 #include "utilmoneystr.h"
 
@@ -1897,6 +1901,24 @@ void CWallet::AvailableCoins(vector<COutput>& vCoins, bool fOnlyConfirmed, const
     }
 }
 
+/**
+ * The node's CSPRNG presented as a UniformRandomBitGenerator, so it can be
+ * handed to std::shuffle.
+ */
+namespace {
+struct CoreRandomEngine {
+    typedef uint64_t result_type;
+    static constexpr result_type min() { return 0; }
+    static constexpr result_type max() { return std::numeric_limits<result_type>::max(); }
+    result_type operator()() const
+    {
+        result_type v;
+        GetRandBytes(reinterpret_cast<unsigned char*>(&v), sizeof(v));
+        return v;
+    }
+};
+} // namespace
+
 static void ApproximateBestSubset(vector<pair<CAmount, pair<const CWalletTx*,unsigned int> > >vValue, const CAmount& nTotalLower, const CAmount& nTargetValue,
                                   vector<char>& vfBest, CAmount& nBest, int iterations = 1000)
 {
@@ -1956,7 +1978,13 @@ bool CWallet::SelectCoinsMinConf(const CAmount& nTargetValue, int nConfMine, int
     vector<pair<CAmount, pair<const CWalletTx*,unsigned int> > > vValue;
     CAmount nTotalLower = 0;
 
-    random_shuffle(vCoins.begin(), vCoins.end(), GetRandInt);
+    // std::random_shuffle was removed in C++17. std::shuffle wants a uniform
+    // random bit generator rather than a "give me a number below n" function,
+    // so the node's own CSPRNG is wrapped as one. It must stay the node's RNG:
+    // seeding a std::mt19937 here instead would make coin selection predictable
+    // and leak which outputs a wallet holds.
+    CoreRandomEngine coinShuffleRng;
+    std::shuffle(vCoins.begin(), vCoins.end(), coinShuffleRng);
 
     BOOST_FOREACH(const COutput &output, vCoins)
     {
