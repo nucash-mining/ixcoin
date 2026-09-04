@@ -88,6 +88,13 @@ jobs:
           SSL_PREFIX="$(brew --prefix openssl@3)"
           BOOST_PREFIX="$(brew --prefix boost)"
           QT_PREFIX="$(brew --prefix qt@5)"
+          # ac_cv_header_byteswap_h=no: macOS has no byteswap.h, but Homebrew
+          # .pc files put /opt/homebrew/include on the include path, where some
+          # formula ships a glibc-style one. It macro-defines bswap_16, so
+          # compat/byteswap.h's own inline definitions expand into nonsense
+          # about __builtin_constant_p. Saying the header is absent is simply
+          # true of the platform, and the fallback definitions are correct.
+          #
           # Only the specific packages go on the include path, never the whole
           # Homebrew prefix: -I/opt/homebrew/include puts every formula's
           # headers ahead of the system ones, and a Homebrew byteswap.h then
@@ -103,6 +110,7 @@ jobs:
             --disable-tests \
             --disable-bench \
             --with-boost="$BOOST_PREFIX" \
+            ac_cv_header_byteswap_h=no \
             BDB_CFLAGS="-I$BDB_PREFIX/include" \
             BDB_LIBS="-L$BDB_PREFIX/lib -ldb_cxx-4.8" \
             CXXFLAGS="-std=c++17" \
