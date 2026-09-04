@@ -88,10 +88,12 @@ jobs:
           SSL_PREFIX="$(brew --prefix openssl@3)"
           BOOST_PREFIX="$(brew --prefix boost)"
           QT_PREFIX="$(brew --prefix qt@5)"
-          # Homebrew's prefix is /opt/homebrew on Apple silicon and /usr/local
-          # on Intel, and clang searches neither by default -- which is why
-          # configure could not find boost/version.hpp and reported it as "no
-          # working boost sleep implementation".
+          # Only the specific packages go on the include path, never the whole
+          # Homebrew prefix: -I/opt/homebrew/include puts every formula's
+          # headers ahead of the system ones, and a Homebrew byteswap.h then
+          # shadows the platform's, breaking compat/byteswap.h with macro
+          # redefinitions of bswap_16 and friends. Individual prefixes are
+          # still needed because clang does not search Homebrew by default.
           BREW_PREFIX="$(brew --prefix)"
           export PKG_CONFIG_PATH="$SSL_PREFIX/lib/pkgconfig:$QT_PREFIX/lib/pkgconfig:$BREW_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           export PATH="$QT_PREFIX/bin:$PATH"
@@ -104,8 +106,8 @@ jobs:
             BDB_CFLAGS="-I$BDB_PREFIX/include" \
             BDB_LIBS="-L$BDB_PREFIX/lib -ldb_cxx-4.8" \
             CXXFLAGS="-std=c++17" \
-            CPPFLAGS="-I$BDB_PREFIX/include -I$SSL_PREFIX/include -I$BOOST_PREFIX/include -I$BREW_PREFIX/include" \
-            LDFLAGS="-L$BDB_PREFIX/lib -L$SSL_PREFIX/lib -L$BOOST_PREFIX/lib -L$BREW_PREFIX/lib -L$HOME/boostcompat/lib"
+            CPPFLAGS="-I$BDB_PREFIX/include -I$SSL_PREFIX/include -I$BOOST_PREFIX/include" \
+            LDFLAGS="-L$BDB_PREFIX/lib -L$SSL_PREFIX/lib -L$BOOST_PREFIX/lib -L$HOME/boostcompat/lib"
 
       # configure reports "No working boost sleep implementation found" for any
       # failure in that probe, and the actual compiler error only exists in
