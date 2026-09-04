@@ -21,6 +21,10 @@ jobs:
         working-directory: ios/IXcoinKit
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Without the tags the version script cannot run git describe, and a
+          # tagged build reports a commit hash instead of the release version.
+          fetch-depth: 0
 
       - name: Swift version
         run: swift --version
