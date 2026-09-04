@@ -18,9 +18,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-13     # x86_64
-            arch: x86_64
-          - runner: macos-14     # Apple silicon
+          # Apple silicon only. GitHub has retired the macOS 13 Intel image, so
+          # a macos-13 job is accepted and then queues forever without ever
+          # being assigned a runner -- it never fails, it just never starts.
+          # An x86_64 build now needs either cross-compilation from this runner
+          # (which could not be smoke-tested here) or a self-hosted Intel Mac.
+          - runner: macos-14
             arch: arm64
     runs-on: ${{ matrix.runner }}
     # The C++ source lives under ixcoin-core/, not at the repository root.
