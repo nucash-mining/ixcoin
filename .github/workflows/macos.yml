@@ -51,6 +51,14 @@ jobs:
       # genbuild.sh only uses the tag when git describe finds one and the tree
       # is clean; otherwise the binaries report a commit hash. Show both so a
       # mismatch is diagnosable from the log rather than by guesswork.
+      # actions/checkout writes the fetched tag as a LIGHTWEIGHT ref pointing at
+      # the commit, so `git describe --abbrev=0` -- which only considers
+      # annotated tags -- reports "no annotated tags can describe" even though
+      # the tag on the remote is annotated. Re-fetch to restore the real tag
+      # objects; without this a tagged build versions itself with a commit hash.
+      - name: Restore annotated tags
+        run: git fetch --force --tags origin
+
       - name: Version detection
         run: |
           git describe --abbrev=0 || echo "(no tag found)"
