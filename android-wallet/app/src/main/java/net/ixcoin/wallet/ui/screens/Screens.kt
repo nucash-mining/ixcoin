@@ -151,6 +151,25 @@ private fun SyncCard(state: IxcoinWalletService.WalletUiState) {
 fun ReceiveScreen(state: IxcoinWalletService.WalletUiState, vm: WalletViewModel) {
     val ctx = LocalContext.current
     val address = state.receiveAddress
+
+    // If the wallet does not match the phrase the user entered, showing an
+    // address here is the single most harmful thing the app could do: coins
+    // sent to it would not be recoverable from their recovery phrase.
+    state.fatalError?.let { message ->
+        Column(
+            Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("Do not use this wallet",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.height(12.dp))
+            Text(message, color = MaterialTheme.colorScheme.error)
+        }
+        return
+    }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

@@ -60,7 +60,13 @@ class IxcoinWalletService(private val appContext: Context) {
         val encrypted: Boolean = false,
         val locked: Boolean = true,
         val transactions: List<TxRow> = emptyList(),
-        val error: String? = null
+        val error: String? = null,
+        /**
+         * Set only when the wallet on disk does not match the seed the user
+         * supplied. Nothing about the wallet can be trusted in that state, so
+         * the UI must warn rather than show a balance or an address.
+         */
+        val fatalError: String? = null
     ) {
         val total: Coin get() = available.add(pending)
     }
@@ -147,6 +153,24 @@ class IxcoinWalletService(private val appContext: Context) {
                 // A brand-new wallet has no keys until this point.
                 if (wallet().importedKeys.isEmpty() && wallet().activeKeyChain == null) {
                     wallet().freshReceiveAddress()
+                }
+
+                // Belt and braces for the worst failure this app can have: the
+                // wallet on screen not being the one the user's phrase builds.
+                // Deleting the old files should make this impossible, but if it
+                // ever is possible again the app must say so rather than show
+                // addresses the recovery phrase does not control.
+                pendingSeed?.let { requested ->
+                    val actual = wallet().keyChainSeed?.mnemonicCode
+                    if (actual != null && actual != requested.mnemonicCode) {
+                        log.error("wallet does not match the seed that was supplied; " +
+                            "refusing to present it")
+                        _state.value = _state.value.copy(
+                            fatalError = "This wallet does not match the recovery phrase " +
+                                "you entered. Do not send coins to it. Reinstall the app " +
+                                "and restore again."
+                        )
+                    }
                 }
                 wallet().addCoinsReceivedEventListener { _, _, _, _ -> publish() }
                 wallet().addCoinsSentEventListener { _, _, _, _ -> publish() }
