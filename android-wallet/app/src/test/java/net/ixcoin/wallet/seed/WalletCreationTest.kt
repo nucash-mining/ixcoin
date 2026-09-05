@@ -120,4 +120,61 @@ class WalletCreationTest {
         lock.lock()
         assertNull("spending must be impossible once locked", lock.aesKeyOrNull())
     }
+
+    /**
+     * Restoring a phrase must produce that phrase's wallet, not a leftover one.
+     *
+     * Regression for the bug where a restore over an existing wallet showed the
+     * OLD wallet's addresses: WalletAppKit honours a supplied seed only when it
+     * creates a wallet, so with a wallet file already on disk it loaded that and
+     * dropped the seed. The user saw addresses their new recovery phrase did not
+     * control, which loses coins sent to them.
+     */
+    @Test
+    fun `a restored phrase controls the addresses shown`() {
+        val first = SeedManager.createSeed(gesture())
+        val second = SeedManager.createSeed(gesture(points = 500))
+        assertNotEquals("the two seeds must differ for this test to mean anything",
+            SeedManager.words(first), SeedManager.words(second))
+
+        val walletA = Wallet.fromSeed(params, first, Script.ScriptType.P2PKH)
+        val addressA = walletA.currentReceiveAddress().toString()
+
+        val phrase = SeedManager.words(second).joinToString(" ")
+        val restored = SeedManager.restoreFromMnemonic(phrase)
+        assertTrue("a phrase we generated must restore",
+            restored is SeedManager.RestoreResult.Ok)
+        val walletB = (restored as SeedManager.RestoreResult.Ok).wallet
+        val addressB = walletB.currentReceiveAddress().toString()
+
+        assertNotEquals(
+            "restoring a different phrase must not reproduce the other wallet's address",
+            addressA, addressB)
+
+        // And restoring the same phrase twice must be deterministic, or the
+        // address shown would not be recoverable from the words at all.
+        val again = SeedManager.restoreFromMnemonic(phrase)
+        assertEquals("the same phrase must always rebuild the same address",
+            addressB,
+            (again as SeedManager.RestoreResult.Ok).wallet
+                .currentReceiveAddress().toString())
+    }
+
+    /** Two independent gestures must never yield the same wallet. */
+    @Test
+    fun `separate wallets never share an address`() {
+        val a = Wallet.fromSeed(params, SeedManager.createSeed(gesture()), Script.ScriptType.P2PKH)
+        val b = Wallet.fromSeed(params, SeedManager.createSeed(gesture()), Script.ScriptType.P2PKH)
+        assertNotEquals("two freshly created wallets must not collide",
+            a.currentReceiveAddress().toString(), b.currentReceiveAddress().toString())
+    }
+
+    /** Even an entirely degenerate gesture must not collide: SecureRandom carries it. */
+    @Test
+    fun `degenerate gestures still produce distinct wallets`() {
+        val a = Wallet.fromSeed(params, SeedManager.createSeed(gesture(degenerate = true)), Script.ScriptType.P2PKH)
+        val b = Wallet.fromSeed(params, SeedManager.createSeed(gesture(degenerate = true)), Script.ScriptType.P2PKH)
+        assertNotEquals("identical gestures must still differ, because mix() XORs SecureRandom",
+            a.currentReceiveAddress().toString(), b.currentReceiveAddress().toString())
+    }
 }

@@ -407,15 +407,55 @@ private fun TxRowItem(tx: IxcoinWalletService.TxRow) {
  * hours of validation — so the cost is stated plainly rather than buried, and
  * light mode stays the default.
  */
+/**
+ * One line describing what the node is really doing.
+ *
+ * The distinction that matters is Full-but-not-running: the switch is on, the
+ * user believes the chain is being validated here, and nothing is. That has to
+ * read as a fault, not as reassurance.
+ */
+private fun nodeSummary(
+    mode: NodeMode,
+    status: net.ixcoin.wallet.node.FullNode.Status,
+): String {
+    if (mode != NodeMode.Full) {
+        return "Light mode: block headers only, verified against the " +
+            "merged-mining proofs."
+    }
+    if (!status.running) return "The node is not running. Turn it off and on to retry."
+    val blocks = status.blocks
+    val headers = status.headers
+    return when {
+        blocks == null -> "Starting the node on this device\u2026"
+        headers != null && headers > 0 && blocks < headers -> {
+            val pct = ((status.progress ?: (blocks.toDouble() / headers)) * 100)
+                .coerceIn(0.0, 100.0)
+            "Validating on this device: block %,d of %,d (%.1f%%)".format(blocks, headers, pct)
+        }
+        else -> "Validating on this device: block %,d, up to date".format(blocks)
+    }
+}
+
 @Composable
 private fun NodeModeSection(vm: WalletViewModel) {
     val supported = remember { vm.fullNodeSupported() }
     if (!supported) return
 
     var mode by remember { mutableStateOf(vm.nodeMode()) }
-    var running by remember { mutableStateOf(vm.fullNodeRunning()) }
+    var status by remember { mutableStateOf(vm.nodeStatus()) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirming by remember { mutableStateOf(false) }
+
+    // The node is a separate process that can die at any point -- Android can
+    // reclaim the app, the datadir can fill up -- so the panel has to keep
+    // asking. Latching this once meant the screen went on claiming the chain
+    // was being validated long after the daemon had gone.
+    LaunchedEffect(mode) {
+        while (true) {
+            status = vm.nodeStatus()
+            kotlinx.coroutines.delay(if (status.running) 5_000L else 15_000L)
+        }
+    }
 
     Text("Node", style = MaterialTheme.typography.titleMedium)
     Card(Modifier.fillMaxWidth()) {
@@ -424,13 +464,12 @@ private fun NodeModeSection(vm: WalletViewModel) {
                 Column(Modifier.weight(1f)) {
                     Text("Run a full node")
                     Text(
-                        if (mode == NodeMode.Full && running)
-                            "Validating the chain on this device."
-                        else
-                            "Light mode: block headers only, verified against the " +
-                                "merged-mining proofs.",
+                        nodeSummary(mode, status),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (mode == NodeMode.Full && !status.running)
+                            MaterialTheme.colorScheme.error
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Switch(
@@ -442,7 +481,7 @@ private fun NodeModeSection(vm: WalletViewModel) {
                         } else {
                             error = vm.setNodeMode(NodeMode.Light)
                             mode = NodeMode.Light
-                            running = vm.fullNodeRunning()
+                            status = vm.nodeStatus()
                         }
                     }
                 )
@@ -473,7 +512,7 @@ private fun NodeModeSection(vm: WalletViewModel) {
                     confirming = false
                     error = vm.setNodeMode(NodeMode.Full)
                     if (error == null) mode = NodeMode.Full
-                    running = vm.fullNodeRunning()
+                    status = vm.nodeStatus()
                 }) { Text("Start the node") }
             },
             dismissButton = {

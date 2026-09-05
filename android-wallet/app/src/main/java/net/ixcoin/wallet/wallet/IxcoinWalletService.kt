@@ -110,6 +110,18 @@ class IxcoinWalletService(private val appContext: Context) {
     fun createWallet(seed: org.bitcoinj.wallet.DeterministicSeed, passphrase: CharArray) {
         pendingSeed = seed
         pendingPassphrase = passphrase
+
+        // WalletAppKit honours a supplied seed ONLY when it decides to create a
+        // wallet. If a wallet file is already on disk it loads that instead and
+        // silently discards the seed -- so the user types a recovery phrase,
+        // sees the previous wallet's addresses, and believes those addresses
+        // belong to the phrase they just entered. They do not, and coins sent
+        // there would not be recoverable from that phrase. Tear the kit down
+        // and remove the old files so the seed is actually the one used.
+        stop()
+        net.ixcoin.wallet.seed.SeedManager.clearExisting(
+            File(appContext.filesDir, "spv"), WALLET_PREFIX)
+
         start()
     }
 
@@ -118,7 +130,10 @@ class IxcoinWalletService(private val appContext: Context) {
         createWallet(seed, passphrase)
 
     fun start() {
-        if (kit != null) return
+        // A pending seed must always win: returning early here meant a restore
+        // requested while the app was already running was a silent no-op.
+        if (kit != null && pendingSeed == null) return
+        if (kit != null) stop()
         val dir = File(appContext.filesDir, "spv")
         if (!dir.exists()) dir.mkdirs()
 

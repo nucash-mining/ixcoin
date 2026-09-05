@@ -31,6 +31,10 @@ class WalletViewModel(app: Application) : AndroidViewModel(app) {
 
     fun fullNodeRunning(): Boolean = net.ixcoin.wallet.node.FullNode.isRunning
 
+    /** What the local node reports about itself, for the settings panel. */
+    fun nodeStatus(): net.ixcoin.wallet.node.FullNode.Status =
+        net.ixcoin.wallet.node.FullNode.status()
+
     /**
      * Switch between a local full node and light (SPV) mode.
      *
