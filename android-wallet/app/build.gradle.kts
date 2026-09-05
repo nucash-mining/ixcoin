@@ -16,11 +16,46 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Release signing. The key is the app's permanent identity: Android will
+    // only install an update signed by the same key it installed originally, so
+    // a wallet signed with the throwaway debug key could never be upgraded --
+    // users would have to uninstall, losing the wallet with it.
+    //
+    // Nothing sensitive lives in this repository. The passphrase is read from a
+    // Gradle property (put it in ~/.gradle/gradle.properties, outside the repo)
+    // or an environment variable, and the keystore itself is referenced by path.
+    signingConfigs {
+        create("release") {
+            val ksPath = (findProperty("IXCOIN_KEYSTORE") as String?)
+                ?: System.getenv("IXCOIN_KEYSTORE")
+            val ksPass = (findProperty("IXCOIN_KEYSTORE_PASSWORD") as String?)
+                ?: System.getenv("IXCOIN_KEYSTORE_PASSWORD")
+            if (ksPath != null && ksPass != null) {
+                storeFile = file(ksPath)
+                storePassword = ksPass
+                keyAlias = (findProperty("IXCOIN_KEY_ALIAS") as String?)
+                    ?: System.getenv("IXCOIN_KEY_ALIAS") ?: "ixcoin"
+                keyPassword = (findProperty("IXCOIN_KEY_PASSWORD") as String?)
+                    ?: System.getenv("IXCOIN_KEY_PASSWORD") ?: ksPass
+                // v3 is what allows the signing key to be rotated later. Without
+                // it this key is the app's identity permanently, with no way to
+                // move to a new one if it is ever lost or compromised.
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Left unsigned when no keystore is configured, so a plain checkout
+            // still builds rather than failing with a confusing signing error.
+            signingConfigs.getByName("release").storeFile?.let {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             isMinifyEnabled = false
@@ -42,6 +77,12 @@ android {
         kotlinCompilerExtensionVersion = "1.5.14"
     }
     packaging {
+        jniLibs {
+            // The full-node daemon is an executable, not a library. Android
+            // only extracts and chmod +x's files matching lib*.so, and only
+            // when they are left uncompressed, so it must not be packed.
+            useLegacyPackaging = true
+        }
         resources {
             excludes += setOf(
                 "META-INF/DEPENDENCIES",
@@ -98,6 +139,9 @@ dependencies {
 
     // QR codes for the receive screen
     implementation("com.google.zxing:core:3.5.3")
+
+    // Fingerprint / face unlock, bound to an Android Keystore key.
+    implementation("androidx.biometric:biometric:1.1.0")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 

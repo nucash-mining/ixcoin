@@ -117,4 +117,22 @@ class AuxPoWParsingTest {
         )
         assertEquals(expected, AuxPoW.foldBranch(leaf, listOf(sib), 0))
     }
+
+    @Test
+    fun `a compact stored header with the auxpow bit parses as header-only`() {
+        // This is how a block comes back out of SPVBlockStore: the header alone,
+        // with no proof following it. Parsing must not run off the end.
+        val withAux = parseAll(load("headers_500000.bin")).first { it.hasAuxPoW }
+        // Exactly what StoredBlock.deserializeCompact hands the serializer:
+        // 80 header bytes plus one zero byte for the transaction count.
+        val headerOnly = ByteArray(81)
+        withAux.bitcoinSerialize().copyInto(headerOnly, 0, 0, 80)
+        assertEquals(81, headerOnly.size)
+
+        val reparsed = params.getSerializer(false)
+            .makeBlock(headerOnly, 0, headerOnly.size) as IxcoinBlock
+        assertEquals(withAux.hash, reparsed.hash)
+        assertTrue("version still marks it as auxpow", reparsed.hasAuxPoW)
+        assertEquals("but no proof is present to parse", null, reparsed.auxPoW)
+    }
 }

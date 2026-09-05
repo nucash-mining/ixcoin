@@ -36,7 +36,9 @@ class AuxPoW private constructor(
     /** The raw 80-byte parent header; its double-SHA256 is what carries the work. */
     val parentHeader: ByteArray,
     /** Total bytes this structure occupied on the wire. */
-    val messageSize: Int
+    val messageSize: Int,
+    /** The exact bytes as they arrived, so the block can be written back. */
+    val rawBytes: ByteArray
 ) {
 
     /** Double-SHA256 of the parent header, i.e. the hash that must meet the target. */
@@ -114,12 +116,22 @@ class AuxPoW private constructor(
                 return List(n.toInt()) { readHash() }
             }
 
-            // Parent coinbase. Transaction parses itself and reports its length.
+            // Parent coinbase.
+            //
+            // Measured explicitly rather than handed to bitcoinj's Transaction,
+            // whose length depends on whether its serializer decides witness
+            // data is present. The reference client writes this transaction
+            // with SERIALIZE_TRANSACTION_NO_WITNESS, so there never is any; a
+            // serializer that thinks otherwise over-reads by a few bytes and
+            // every subsequent field lands mid-value. The symptom is a wild
+            // varint ("Claimed value length too large") which kills the
+            // connection and looks like a flaky peer rather than a parse bug.
+            val coinbaseLength = measureLegacyTransaction(payload, cursor)
             val coinbase = Transaction(
-                params, payload, cursor, null,
-                params.defaultSerializer, Message.UNKNOWN_LENGTH, null
+                params, payload.copyOfRange(cursor, cursor + coinbaseLength), 0, null,
+                params.defaultSerializer, coinbaseLength, null
             )
-            cursor += coinbase.messageSize
+            cursor += coinbaseLength
 
             val parentBlockHash = readHash()
             val coinbaseBranch = readBranch("coinbase")
@@ -133,8 +145,42 @@ class AuxPoW private constructor(
 
             return AuxPoW(
                 coinbase, parentBlockHash, coinbaseBranch, coinbaseIndex,
-                chainBranch, chainIndex, parentHeader, cursor - offset
+                chainBranch, chainIndex, parentHeader, cursor - offset,
+                payload.copyOfRange(offset, cursor)
             )
+        }
+
+        /**
+         * Length of a transaction serialised the old way — no segwit marker,
+         * no witness data — starting at [offset].
+         */
+        private fun measureLegacyTransaction(payload: ByteArray, offset: Int): Int {
+            var c = offset
+            fun need(n: Int) {
+                if (c + n > payload.size)
+                    throw ProtocolException("AuxPoW coinbase truncated at $c of ${payload.size}")
+            }
+            fun varInt(): Long {
+                need(1)
+                val v = VarInt(payload, c); c += v.originalSizeInBytes; return v.value
+            }
+            need(4); c += 4                                   // version
+            val nIn = varInt()
+            if (nIn == 0L) throw ProtocolException("AuxPoW coinbase has no inputs")
+            for (i in 0 until nIn) {
+                need(36); c += 36                             // prevout
+                val scriptLen = varInt()
+                need(scriptLen.toInt()); c += scriptLen.toInt()
+                need(4); c += 4                               // sequence
+            }
+            val nOut = varInt()
+            for (i in 0 until nOut) {
+                need(8); c += 8                               // value
+                val scriptLen = varInt()
+                need(scriptLen.toInt()); c += scriptLen.toInt()
+            }
+            need(4); c += 4                                   // lock time
+            return c - offset
         }
 
         /**

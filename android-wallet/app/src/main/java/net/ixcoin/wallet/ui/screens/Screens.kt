@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import net.ixcoin.wallet.core.IxcoinMainNetParams
+import net.ixcoin.wallet.node.NodeMode
 import net.ixcoin.wallet.ui.WalletViewModel
 import net.ixcoin.wallet.ui.qrBitmap
 import net.ixcoin.wallet.ui.theme.AmountStyle
@@ -121,8 +123,20 @@ private fun SyncCard(state: IxcoinWalletService.WalletUiState) {
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Text("Block height ${state.chainHeight}", style = MonoSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                buildString {
+                    append("Block ")
+                    append(state.chainHeight.toString().reversed().chunked(3)
+                        .joinToString(",").reversed())
+                    if (state.syncing && state.blocksLeft > 0) {
+                        append(" · ")
+                        append(state.blocksLeft.toString().reversed().chunked(3)
+                            .joinToString(",").reversed())
+                        append(" to go")
+                    }
+                },
+                style = MonoSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             state.error?.let {
                 Spacer(Modifier.height(8.dp))
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -303,10 +317,28 @@ fun TransactionsScreen(state: IxcoinWalletService.WalletUiState) {
     }
 }
 
+/**
+ * Open a transaction on the public block explorer.
+ *
+ * The explorer is a single-page app and routes on the fragment, so the path
+ * form (/tx/<id>) is served as a 404 by the static host — the "#/" is load
+ * bearing. Only the txid leaves the device; the wallet holds no account there.
+ */
+private fun openInExplorer(context: Context, txId: String) {
+    val url = "https://ixc-exp.wattxchange.app/#/tx/$txId"
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+}
+
 @Composable
 private fun TxRowItem(tx: IxcoinWalletService.TxRow) {
     val dateFmt = remember { SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()) }
-    Card(Modifier.fillMaxWidth()) {
+    val context = LocalContext.current
+    Card(Modifier.fillMaxWidth().clickable { openInExplorer(context, tx.txId) }) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 if (tx.incoming) Icons.Filled.ArrowDownward else Icons.Filled.ArrowUpward,
@@ -346,14 +378,207 @@ private fun TxRowItem(tx: IxcoinWalletService.TxRow) {
                 color = if (tx.incoming) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurface
             )
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                Icons.Filled.OpenInNew,
+                "View on the block explorer",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
 
 // ------------------------------------------------------------------ Settings
 
+/**
+ * Connected peers, and a way to add one by hand.
+ *
+ * iXcoin's network is small enough that the handful of bootstrap nodes can all
+ * be unreachable from a given phone — several are IPv6-only — which leaves the
+ * wallet with nothing to sync from and no way for the user to fix it. Added
+ * addresses are stored on the device and offered to peer discovery alongside
+ * the built-in seeds.
+ */
+/**
+ * Full node or light wallet.
+ *
+ * A full node on a phone is a real commitment — a multi-gigabyte download and
+ * hours of validation — so the cost is stated plainly rather than buried, and
+ * light mode stays the default.
+ */
 @Composable
-fun SettingsScreen(state: IxcoinWalletService.WalletUiState, vm: WalletViewModel) {
+private fun NodeModeSection(vm: WalletViewModel) {
+    val supported = remember { vm.fullNodeSupported() }
+    if (!supported) return
+
+    var mode by remember { mutableStateOf(vm.nodeMode()) }
+    var running by remember { mutableStateOf(vm.fullNodeRunning()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var confirming by remember { mutableStateOf(false) }
+
+    Text("Node", style = MaterialTheme.typography.titleMedium)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Run a full node")
+                    Text(
+                        if (mode == NodeMode.Full && running)
+                            "Validating the chain on this device."
+                        else
+                            "Light mode: block headers only, verified against the " +
+                                "merged-mining proofs.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = mode == NodeMode.Full,
+                    onCheckedChange = { on ->
+                        error = null
+                        if (on) {
+                            confirming = true
+                        } else {
+                            error = vm.setNodeMode(NodeMode.Light)
+                            mode = NodeMode.Light
+                            running = vm.fullNodeRunning()
+                        }
+                    }
+                )
+            }
+            error?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Run a full node?") },
+            text = {
+                Text(
+                    "Your phone will download and verify the whole iXcoin chain " +
+                        "instead of trusting other nodes. Expect several gigabytes " +
+                        "of storage and hours of syncing, and keep it on a charger " +
+                        "and on Wi-Fi.\n\n" +
+                        "Your keys stay in this wallet either way — the node only " +
+                        "supplies blocks, and it is reachable only from this device."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirming = false
+                    error = vm.setNodeMode(NodeMode.Full)
+                    if (error == null) mode = NodeMode.Full
+                    running = vm.fullNodeRunning()
+                }) { Text("Start the node") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirming = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+
+@Composable
+private fun PeersSection(
+    state: IxcoinWalletService.WalletUiState,
+    vm: WalletViewModel,
+) {
+    var entry by rememberSaveable { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var added by remember { mutableStateOf(vm.userPeers()) }
+
+    Text("Peers", style = MaterialTheme.typography.titleMedium)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (state.peerRows.isEmpty()) {
+                Text(
+                    if (state.peers > 0) "Connecting…" else "No peers connected.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                state.peerRows.forEach { p ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(p.address, style = MonoSmall, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                            Text(
+                                buildString {
+                                    if (p.height > 0) append("height ").append(p.height)
+                                    if (p.subVer.isNotEmpty()) {
+                                        if (isNotEmpty()) append(" · ")
+                                        append(p.subVer)
+                                    }
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (p.userAdded) {
+                            Text("added", style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = entry,
+                    onValueChange = { entry = it; error = null },
+                    label = { Text("Add peer (host or host:port)") },
+                    singleLine = true,
+                    isError = error != null,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        error = vm.addPeer(entry)
+                        if (error == null) { entry = ""; added = vm.userPeers() }
+                    },
+                    enabled = entry.isNotBlank()
+                ) { Text("Add") }
+            }
+            error?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
+            }
+
+            if (added.isNotEmpty()) {
+                Text("Saved addresses", style = MaterialTheme.typography.labelMedium)
+                added.forEach { a ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(a, style = MonoSmall, modifier = Modifier.weight(1f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        TextButton(onClick = { vm.removePeer(a); added = vm.userPeers() }) {
+                            Text("Remove")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
+fun SettingsScreen(
+    state: IxcoinWalletService.WalletUiState,
+    vm: WalletViewModel,
+    biometricAvailable: Boolean = false,
+    onToggleBiometric: (Boolean) -> Unit = {},
+    onToggleTotp: (Boolean) -> Unit = {},
+) {
     val ctx = LocalContext.current
     var showSeed by remember { mutableStateOf(false) }
     Column(
@@ -370,6 +595,10 @@ fun SettingsScreen(state: IxcoinWalletService.WalletUiState, vm: WalletViewModel
                 InfoRow("Protocol", IxcoinMainNetParams.PROTOCOL_VERSION.toString())
             }
         }
+
+        NodeModeSection(vm)
+
+        PeersSection(state, vm)
 
         Text("Backup", style = MaterialTheme.typography.titleMedium)
         Card(Modifier.fillMaxWidth()) {
@@ -406,6 +635,23 @@ fun SettingsScreen(state: IxcoinWalletService.WalletUiState, vm: WalletViewModel
                 }
             }
         }
+
+        SecuritySection(
+            encrypted = state.encrypted,
+            locked = state.locked,
+            biometricEnabled = vm.security.biometricEnabled,
+            biometricAvailable = biometricAvailable,
+            pinEnabled = vm.security.pinEnabled,
+            totpEnabled = vm.security.totpEnabled,
+            autoLockMinutes = vm.security.autoLockMinutes,
+            onEncrypt = { vm.encryptWallet(it) },
+            onChangePassphrase = { a, b -> vm.changePassphrase(a, b) },
+            onToggleBiometric = onToggleBiometric,
+            onSetPin = { vm.setPin(it) },
+            onToggleTotp = onToggleTotp,
+            onAutoLock = { vm.security.autoLockMinutes = it },
+            onLockNow = { vm.lockNow() },
+        )
 
         Text("About", style = MaterialTheme.typography.titleMedium)
         Card(Modifier.fillMaxWidth()) {

@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import net.ixcoin.wallet.core.IxcoinMainNetParams
 import net.ixcoin.wallet.core.IxcoinPeerGroup
+import net.ixcoin.wallet.security.WalletLock
 import org.bitcoinj.core.Address
 import org.bitcoinj.core.Coin
 import org.bitcoinj.core.InsufficientMoneyException
@@ -29,8 +30,18 @@ import java.util.Date
  */
 class IxcoinWalletService(private val appContext: Context) {
 
+    /** Peer addresses the user added; kept on the device, like everything else. */
+    private val prefs by lazy {
+        appContext.getSharedPreferences("ixcoin_peers", Context.MODE_PRIVATE)
+    }
+
+    private val log = org.slf4j.LoggerFactory.getLogger(IxcoinWalletService::class.java)
+
     private val params = IxcoinMainNetParams.get()
     private var kit: WalletAppKit? = null
+
+    /** Encryption state and the in-memory spending key. See WalletLock. */
+    val lock = WalletLock()
 
     private val _state = MutableStateFlow(WalletUiState())
     val state: StateFlow<WalletUiState> = _state.asStateFlow()
@@ -40,15 +51,27 @@ class IxcoinWalletService(private val appContext: Context) {
         val syncing: Boolean = true,
         val syncProgress: Int = 0,
         val chainHeight: Int = 0,
+        val blocksLeft: Int = 0,
         val peers: Int = 0,
+        val peerRows: List<PeerRow> = emptyList(),
         val available: Coin = Coin.ZERO,
         val pending: Coin = Coin.ZERO,
         val receiveAddress: String = "",
+        val encrypted: Boolean = false,
+        val locked: Boolean = true,
         val transactions: List<TxRow> = emptyList(),
         val error: String? = null
     ) {
         val total: Coin get() = available.add(pending)
     }
+
+    /** One connected peer, as shown on the Peers screen. */
+    data class PeerRow(
+        val address: String,
+        val subVer: String,
+        val height: Long,
+        val userAdded: Boolean
+    )
 
     data class TxRow(
         val txId: String,
@@ -58,6 +81,41 @@ class IxcoinWalletService(private val appContext: Context) {
         val incoming: Boolean,
         val counterparty: String?
     )
+
+    private var heartbeat: java.util.Timer? = null
+    private var lastStatusLog = 0L
+
+    /** Set by [createWallet]/[restoreWallet] and consumed by the next [start]. */
+    private var pendingSeed: org.bitcoinj.wallet.DeterministicSeed? = null
+    private var pendingPassphrase: CharArray? = null
+
+    /**
+     * True once a wallet file exists on disk.
+     *
+     * The kit creates a random wallet the moment it starts, so onboarding has
+     * to run *before* anything calls [start] — otherwise the generated seed
+     * would be discarded in favour of one the user never saw.
+     */
+    /** True once [start] has built the kit, whether or not it is RUNNING yet. */
+    val isStarted: Boolean get() = kit != null
+
+    fun hasWallet(): Boolean =
+        File(File(appContext.filesDir, "spv"), "$WALLET_PREFIX.wallet").exists()
+
+    /**
+     * Create the wallet from a freshly generated seed and lock it with
+     * [passphrase]. The passphrase is applied before the first save, so the
+     * wallet file is never written to disk unencrypted.
+     */
+    fun createWallet(seed: org.bitcoinj.wallet.DeterministicSeed, passphrase: CharArray) {
+        pendingSeed = seed
+        pendingPassphrase = passphrase
+        start()
+    }
+
+    /** Same, for a seed the user is restoring from their recovery phrase. */
+    fun restoreWallet(seed: org.bitcoinj.wallet.DeterministicSeed, passphrase: CharArray) =
+        createWallet(seed, passphrase)
 
     fun start() {
         if (kit != null) return
@@ -80,27 +138,90 @@ class IxcoinWalletService(private val appContext: Context) {
                 wallet().addChangeEventListener { publish() }
                 peerGroup().addConnectedEventListener { _, _ -> publish() }
                 peerGroup().addDisconnectedEventListener { _, _ -> publish() }
-                peerGroup().maxConnections = 6
+                // bitcoinj elects a download peer in exactly one place —
+                // handleNewPeer, behind `connected > maxConnections / 2` — and
+                // nowhere else re-runs that election from scratch. So the
+                // target has to be low enough that the condition can actually
+                // become true with the number of peers this network gives us.
+                //
+                // At 4 it needs 3 peers. iXcoin has two reachable IPv4 nodes
+                // (the seed crawl's other entries are IPv6, which most mobile
+                // networks cannot reach), so only 2 ever connected, 2 > 2 was
+                // false, and no download peer was ever chosen: peers healthy,
+                // nothing thrown, height frozen forever. At 2 the second peer
+                // opens the gate.
+                peerGroup().maxConnections = 2
+
+                // Encrypt before the first autosave so the wallet file only
+                // ever exists on disk in its locked form.
+                pendingPassphrase?.let { pass ->
+                    if (!wallet().isEncrypted) {
+                        runCatching { lock.encrypt(wallet(), pass) }
+                            .onFailure { log.error("could not encrypt new wallet", it) }
+                    }
+                    pass.fill('\u0000')
+                }
+                pendingPassphrase = null
+                pendingSeed = null
                 publish()
             }
         }
 
+        // Without checkpoints a new wallet starts at the genesis block and has
+        // to pull about a million headers before it is usable. With them it
+        // jumps to the last checkpoint at or before the wallet's creation time.
+        runCatching { k.setCheckpoints(appContext.assets.open("checkpoints.txt")) }
+            .onFailure { log.warn("checkpoints unavailable, syncing from genesis: {}", it.toString()) }
+
+        // Must precede startAsync(): the kit only honours a supplied seed while
+        // it is deciding whether to create or load a wallet.
+        pendingSeed?.let { k.restoreWalletFromSeed(it) }
         k.setBlockingStartup(false)
         k.setUserAgent(USER_AGENT, VERSION)
         k.setAutoSave(true)
-        k.setPeerNodes(*seedPeers())
+        // Use discovery rather than setPeerNodes(): the latter pins the peer
+        // list and switches discovery off entirely ("0 discoverers" in the
+        // logs), so when one of the handful of seeds drops there is nothing to
+        // fall back on and the download stalls. As a discovery source the seeds
+        // still bootstrap us, but bitcoinj also learns further peers from addr
+        // gossip and can replace ones that die.
+        k.setDiscovery(object : org.bitcoinj.net.discovery.PeerDiscovery {
+            override fun getPeers(services: Long, timeout: Long, unit: java.util.concurrent.TimeUnit) =
+                seedSocketAddresses()
+            override fun shutdown() {}
+        })
         k.setDownloadListener(object : org.bitcoinj.core.listeners.DownloadProgressTracker() {
             override fun progress(pct: Double, blocksLeft: Int, date: Date?) {
-                _state.value = _state.value.copy(syncing = true, syncProgress = pct.toInt())
+                // Carry the height through too: publish() only runs on wallet
+                // and peer events, so during a long header download nothing
+                // else would ever update it and the UI sat at "Block height 0"
+                // while the chain was in fact downloading.
+                _state.value = _state.value.copy(
+                    syncing = true,
+                    syncProgress = pct.toInt(),
+                    chainHeight = kit?.chain()?.bestChainHeight ?: _state.value.chainHeight,
+                    blocksLeft = blocksLeft,
+                )
             }
 
             override fun doneDownload() {
-                _state.value = _state.value.copy(syncing = false, syncProgress = 100)
+                _state.value = _state.value.copy(syncing = false, syncProgress = 100, blocksLeft = 0)
                 publish()
             }
         })
 
         kit = k
+        // bitcoinj emits no event per header, so without this the UI would show
+        // a stale height for the whole download.
+        heartbeat = java.util.Timer("ixcoin-state", true).apply {
+            scheduleAtFixedRate(object : java.util.TimerTask() {
+                override fun run() {
+                    runCatching { publish() }
+                    runCatching { logStatus() }
+                }
+            }, 2_000L, 2_000L)
+        }
+        log.info("starting SPV kit in {}", dir)
         k.addListener(object : com.google.common.util.concurrent.Service.Listener() {
             override fun running() {
                 _state.value = _state.value.copy(started = true)
@@ -108,13 +229,19 @@ class IxcoinWalletService(private val appContext: Context) {
             }
 
             override fun failed(from: com.google.common.util.concurrent.Service.State, failure: Throwable) {
+                log.error("wallet kit failed from state {}", from, failure)
                 _state.value = _state.value.copy(error = failure.message ?: failure.toString())
             }
         }, Runnable::run)
         k.startAsync()
     }
 
+    /**
+     * Shut the SPV stack down. Only the foreground service should call this —
+     * a ViewModel being cleared on a rotation must not stop the sync.
+     */
     fun stop() {
+        heartbeat?.cancel(); heartbeat = null
         kit?.let { runCatching { it.stopAsync().awaitTerminated() } }
         kit = null
     }
@@ -145,6 +272,10 @@ class IxcoinWalletService(private val appContext: Context) {
         val dest = Address.fromString(params, toAddress)
         val req = if (emptyWallet) SendRequest.emptyWallet(dest) else SendRequest.to(dest, amount)
         feePerKb?.let { req.feePerKb = it }
+        if (w.isEncrypted) {
+            req.aesKey = lock.aesKeyOrNull()
+                ?: throw IllegalStateException("Wallet is locked. Unlock it to send.")
+        }
         val result = w.sendCoins(pg, req)
         publish()
         return result.tx.txId.toString()
@@ -185,13 +316,38 @@ class IxcoinWalletService(private val appContext: Context) {
                 )
             }
         _state.value = _state.value.copy(
-            chainHeight = chain?.bestChainHeight ?: 0,
+            chainHeight = chain?.bestChainHeight ?: _state.value.chainHeight,
             peers = kit?.peerGroup()?.numConnectedPeers() ?: 0,
+            peerRows = peerRows(),
             available = w.getBalance(Wallet.BalanceType.AVAILABLE),
             pending = w.getBalance(Wallet.BalanceType.ESTIMATED)
                 .subtract(w.getBalance(Wallet.BalanceType.AVAILABLE)),
             receiveAddress = w.currentReceiveAddress().toString(),
+            encrypted = w.isEncrypted,
+            locked = w.isEncrypted && lock.aesKeyOrNull() == null,
             transactions = txs
+        )
+    }
+
+    /**
+     * A once-a-minute line of sync state. Without it a stalled chain is
+     * invisible: peers stay connected and nothing throws, so the log looks
+     * healthy while the height never moves.
+     */
+    private fun logStatus() {
+        val now = System.currentTimeMillis()
+        if (now - lastStatusLog < 30_000L) return
+        lastStatusLog = now
+        val k = kit
+        val st = _state.value
+        val height = runCatching { k?.chain()?.bestChainHeight }.getOrNull()
+        val peers = runCatching { k?.peerGroup()?.numConnectedPeers() }.getOrNull()
+        android.util.Log.i(
+            "ixcoin-status",
+            "kit=${runCatching { k?.state()?.toString() }.getOrNull()} " +
+                "height=${height ?: st.chainHeight} peers=${peers ?: st.peers} " +
+                "progress=${st.syncProgress}% left=${st.blocksLeft} " +
+                "wallet=${wallet != null}"
         )
     }
 
@@ -205,27 +361,148 @@ class IxcoinWalletService(private val appContext: Context) {
         }
     }.getOrNull()
 
-    private fun seedPeers(): Array<PeerAddress> =
-        SEED_NODES.mapNotNull { (host, port) ->
-            runCatching { PeerAddress(params, InetSocketAddress(InetAddress.getByName(host), port)) }
-                .getOrNull()
-        }.toTypedArray()
+    private fun peerRows(): List<IxcoinWalletService.PeerRow> = runCatching {
+        val user = userPeers()
+        kit?.peerGroup()?.connectedPeers.orEmpty().map { p ->
+            val a = p.address
+            val hostPort = "${a.addr?.hostAddress ?: a.hostname}:${a.port}"
+            IxcoinWalletService.PeerRow(
+                address = hostPort,
+                subVer = p.peerVersionMessage?.subVer ?: "",
+                height = p.bestHeight,
+                userAdded = hostPort in user
+            )
+        }.sortedBy { it.address }
+    }.getOrDefault(emptyList())
+
+    /** Peer addresses the user typed in, as "host:port". */
+    fun userPeers(): Set<String> =
+        prefs.getStringSet(KEY_USER_PEERS, emptySet())!!.toSortedSet()
+
+    /**
+     * Add a peer by "host" or "host:port". Returns null on success, or a
+     * message to show the user. The address is resolved first so a typo is
+     * reported straight away rather than becoming a silent no-op.
+     */
+    fun addPeer(input: String): String? {
+        val text = input.trim()
+        if (text.isEmpty()) return "Enter an address."
+        val (host, port) = splitHostPort(text) ?: return "Could not read that address."
+        val resolved = try {
+            InetAddress.getByName(host)
+        } catch (e: Exception) {
+            return "$host could not be resolved."
+        }
+        val entry = "${resolved.hostAddress}:$port"
+        prefs.edit().putStringSet(KEY_USER_PEERS, userPeers() + entry).apply()
+        // Nudge the group to try it now rather than at the next discovery pass.
+        runCatching {
+            kit?.peerGroup()?.addAddress(PeerAddress(params, InetSocketAddress(resolved, port)))
+        }
+        publish()
+        return null
+    }
+
+    fun removePeer(entry: String) {
+        prefs.edit().putStringSet(KEY_USER_PEERS, userPeers() - entry).apply()
+        publish()
+    }
+
+    /** "1.2.3.4", "1.2.3.4:8337", "[::1]:8337" and "::1" all parse. */
+    private fun splitHostPort(text: String): Pair<String, Int>? {
+        if (text.startsWith("[")) {                       // bracketed IPv6
+            val close = text.indexOf(']')
+            if (close < 0) return null
+            val host = text.substring(1, close)
+            val port = text.substring(close + 1).removePrefix(":")
+            return host to (port.toIntOrNull() ?: DEFAULT_PORT)
+        }
+        // A bare IPv6 literal has several colons; only treat the last one as a
+        // port separator when there is exactly one.
+        val colons = text.count { it == ':' }
+        if (colons == 1) {
+            val (h, p) = text.split(":")
+            val port = p.toIntOrNull() ?: return null
+            if (port !in 1..65535) return null
+            return h to port
+        }
+        return text to DEFAULT_PORT
+    }
+
+    private fun seedSocketAddresses(): Array<InetSocketAddress> {
+        // In full-node mode the local daemon is the only peer we want: the
+        // point of running it is that this device validates the chain itself
+        // and no stranger learns which addresses we are watching. Fall through
+        // to the public seeds if it is not up yet, so the wallet still works
+        // while the node is starting or if it failed.
+        if (net.ixcoin.wallet.node.NodeMode.current(appContext) ==
+            net.ixcoin.wallet.node.NodeMode.Full &&
+            net.ixcoin.wallet.node.FullNode.isRunning
+        ) {
+            log.info("full-node mode: syncing from the local daemon only")
+            return arrayOf(
+                InetSocketAddress(
+                    InetAddress.getByName("127.0.0.1"),
+                    net.ixcoin.wallet.node.NodeMode.P2P_PORT
+                )
+            )
+        }
+
+        val out = SEED_NODES.mapNotNull { (host, port) ->
+            try {
+                InetSocketAddress(InetAddress.getByName(host), port)
+            } catch (e: Exception) {
+                log.warn("seed peer {}:{} unusable: {}", host, port, e.toString())
+                null
+            }
+        }
+        val extra = userPeers().mapNotNull { entry ->
+            val (h, p) = splitHostPort(entry) ?: return@mapNotNull null
+            try { InetSocketAddress(InetAddress.getByName(h), p) } catch (e: Exception) { null }
+        }
+        val all = (out + extra).distinct()
+        log.info("offering {} seed + {} user peers to discovery", out.size, extra.size)
+        if (all.isEmpty()) {
+            _state.value = _state.value.copy(error = "No reachable seed nodes could be resolved.")
+        }
+        return all.toTypedArray()
+    }
 
     companion object {
+
+        /**
+         * One SPV stack per process.
+         *
+         * The foreground service and the UI both need it, and two WalletAppKits
+         * over the same files would race on the wallet and the chain store.
+         */
+        @Volatile private var INSTANCE: IxcoinWalletService? = null
+
+        fun get(context: Context): IxcoinWalletService =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: IxcoinWalletService(context.applicationContext).also { INSTANCE = it }
+            }
+
         const val WALLET_PREFIX = "ixcoin"
-        const val USER_AGENT = "iXcoin Wallet (Android)"
+        // BIP14 subver components may not contain "/", ":", "(" or ")".
+        // bitcoinj rejects them outright, which aborts PeerGroup startup.
+        const val USER_AGENT = "iXcoin Wallet Android"
         const val VERSION = "1.0.0"
 
         /**
          * Bootstrap nodes. The project's DNS seeds (uk/nyc/sgp.ixcoin.co) stopped
          * resolving, so these were taken from a live crawl of the network.
          */
+        // Only nodes a live crawl actually answered on. Dead entries make
+        // bitcoinj churn reconnect attempts, since setPeerNodes() disables
+        // discovery and it has nothing else to try.
+        const val DEFAULT_PORT = 8337
+        private const val KEY_USER_PEERS = "user_peers"
+
         val SEED_NODES: List<Pair<String, Int>> = listOf(
             "18.217.178.46" to 8337,
             "91.121.45.149" to 8337,
-            "64.71.72.56" to 8337,
-            "2600:1702:7860:6090::48" to 8337,
-            "2a0d:c2c0:1:17:be24:11ff:feb0:9f6a" to 5007
+            "2600:1702:7860:6090::48" to 8337
         )
     }
 }

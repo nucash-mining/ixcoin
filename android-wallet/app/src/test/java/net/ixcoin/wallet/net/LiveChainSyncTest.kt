@@ -56,16 +56,20 @@ class LiveChainSyncTest {
         peers.setUserAgent("iXcoin Wallet test", "1.0.0")
         peers.addAddress(PeerAddress(params, InetSocketAddress(InetAddress.getByName(host), port)))
 
-        val target = 60_000   // well past the AuxPoW switch at 45000 and the two retarget rule changes
+        val target = System.getProperty("syncTarget")?.toInt() ?: 60_000   // well past the AuxPoW switch at 45000 and the two retarget rule changes
         try {
             peers.start()
             val tracker = object : DownloadProgressTracker() {
                 override fun progress(pct: Double, blocksLeft: Int, date: Date?) {}
             }
             peers.startBlockChainDownload(tracker)
-            val deadline = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(6)
+            val deadline = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(System.getProperty("syncMinutes")?.toLong() ?: 6L)
+            var last = 0
             while (chain.bestChainHeight < target && System.currentTimeMillis() < deadline) {
-                Thread.sleep(1000)
+                Thread.sleep(5000)
+                val h = chain.bestChainHeight
+                if (h / 50_000 != last / 50_000) println("  height $h")
+                last = h
             }
             val height = chain.bestChainHeight
             println("live sync reached height $height")

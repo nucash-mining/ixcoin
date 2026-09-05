@@ -133,8 +133,18 @@ class IxcoinMainNetParams : AbstractBitcoinNetParams() {
 
         var cursor: StoredBlock = storedPrev
         repeat(blocksToGoBack) {
-            cursor = cursor.getPrev(blockStore)
-                ?: throw VerificationException("Difficulty transition at height $height: chain too short")
+            val prev = cursor.getPrev(blockStore)
+            if (prev == null) {
+                // We started from a checkpoint, so the window this retarget is
+                // computed over predates anything we hold. The retarget cannot
+                // be recomputed and there is nothing to compare against — the
+                // checkpoint is the trust anchor for everything below it, so
+                // accept and carry on rather than rejecting a valid chain.
+                // Without this a checkpointed wallet stalls at the first
+                // retarget it meets.
+                return
+            }
+            cursor = prev
         }
 
         val timespan = calculateNextTimespan(

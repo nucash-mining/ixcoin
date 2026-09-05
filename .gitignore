@@ -38,3 +38,7 @@ android-wallet/local.properties
 # berkeley db build input
 db-4.8.30.NC*/
 db-4.8.30.NC.tar.gz*
+*.jks
+*.keystore
+keystore.properties
+local.properties

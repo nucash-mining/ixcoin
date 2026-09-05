@@ -21,11 +21,16 @@ class IxcoinPeerGroup(
     chain: AbstractBlockChain?
 ) : PeerGroup(params, chain) {
 
+    private val log = org.slf4j.LoggerFactory.getLogger(IxcoinPeerGroup::class.java)
+
     override fun selectDownloadPeer(peers: List<Peer>): Peer? {
         if (peers.isEmpty()) return null
 
         val mostCommonChainHeight = getMostCommonChainHeight(peers)
-        if (mostCommonChainHeight == 0) return null
+        if (mostCommonChainHeight == 0) {
+            log.info("no download peer yet: {} peers, no agreed chain height", peers.size)
+            return null
+        }
 
         val candidates = peers.filter { peer ->
             val version = peer.peerVersionMessage ?: return@filter false
@@ -34,7 +39,11 @@ class IxcoinPeerGroup(
             val height = peer.bestHeight
             height >= mostCommonChainHeight && height <= mostCommonChainHeight + 1
         }
-        if (candidates.isEmpty()) return null
+        if (candidates.isEmpty()) {
+            log.info("no download peer: none of {} peers are at height {}", peers.size, mostCommonChainHeight)
+            return null
+        }
+        log.info("download peer chosen from {} candidates at height {}", candidates.size, mostCommonChainHeight)
 
         // Spread the load rather than always hammering the first peer.
         return candidates[(Math.random() * candidates.size).toInt()]

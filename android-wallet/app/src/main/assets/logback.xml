@@ -1,0 +1,13 @@
+<configuration>
+    <!-- Route bitcoinj/slf4j output to logcat so SPV problems are diagnosable
+         on a real device (adb logcat -s ixcoin). -->
+    <appender name="LOGCAT" class="ch.qos.logback.classic.android.LogcatAppender">
+        <tagEncoder><pattern>ixcoin</pattern></tagEncoder>
+        <encoder><pattern>%logger{12} %msg%n</pattern></encoder>
+    </appender>
+    <logger name="org.bitcoinj" level="INFO"/>
+    <logger name="net.ixcoin" level="DEBUG"/>
+    <root level="INFO">
+        <appender-ref ref="LOGCAT"/>
+    </root>
+</configuration>
