@@ -4,9 +4,21 @@ from PIL import Image
 B = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(B, 'out'); os.makedirs(OUT, exist_ok=True)
 
-def render(svg, px):
+MASTER = os.path.join(B, 'ixcoin-logo.png')
+
+
+def render(src, px):
+    """Rasterise a brand source at px*px.
+
+    The mainnet mark is a raster master (ixcoin-logo.png); the testnet variant is
+    still SVG. Downscaling the master with LANCZOS keeps the coin's bevel and the
+    soft outer halo readable all the way down to 16px, which a nearest-neighbour
+    or bilinear reduction turns to mush.
+    """
+    if src.endswith('.png'):
+        return Image.open(src).convert('RGBA').resize((px, px), Image.LANCZOS)
     buf = io.BytesIO()
-    cairosvg.svg2png(url=svg, write_to=buf, output_width=px, output_height=px)
+    cairosvg.svg2png(url=src, write_to=buf, output_width=px, output_height=px)
     buf.seek(0)
     return Image.open(buf).convert('RGBA')
 
@@ -35,7 +47,7 @@ def write_xpm(img, path, name):
     with open(path, 'w') as f:
         f.write("/* XPM */\nstatic char * %s_xpm[] = {\n%s};\n" % (name, ",\n".join(lines)))
 
-main = os.path.join(B, 'ixcoin.svg')
+main = MASTER if os.path.exists(MASTER) else os.path.join(B, 'ixcoin.svg')
 test = os.path.join(B, 'ixcoin-testnet.svg')
 
 # PNGs
